@@ -1,0 +1,397 @@
+index.html
+import React, { useState, useEffect, useRef } from 'react';
+import { 
+  Briefcase, 
+  Shirt, 
+  Footprints, 
+  Plug, 
+  FileText, 
+  Umbrella, 
+  Camera, 
+  Headphones, 
+  Watch, 
+  Smartphone, 
+  ShoppingBag,
+  Grid
+} from 'lucide-react';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+
+// --- Types & Constants ---
+
+interface PackingItem {
+  name: string;
+  category: string;
+  weight: number; // in lbs
+  quantity: number;
+}
+
+interface VisualItem {
+  id: string;
+  name: string;
+  category: string;
+  width: number; // inches
+  height: number; // inches
+  x: number;     // pixels (relative to container)
+  y: number;     // pixels
+  containerId: 'suitcase' | 'carryOn';
+  color: string;
+  icon: React.ReactNode;
+}
+
+interface VisualPackingAidProps {
+  items: PackingItem[];
+  tripType?: string; // e.g., 'business', 'leisure'
+  tripDuration?: number;
+}
+
+// Standard Real-World Dimensions (Inches)
+const ITEM_DIMENSIONS: Record<string, { w: number; h: number }> = {
+  clothing: { w: 10, h: 11 },   // Folded T-shirt/Shirt
+  shoes: { w: 8, h: 12 },       // Pair of shoes
+  electronics: { w: 10, h: 8 }, // Tablet/Camera bag size
+  documents: { w: 9, h: 6 },    // Travel wallet size
+  toiletries: { w: 9, h: 6 },   // Standard Toiletry Bag
+  accessories: { w: 4, h: 4 },  // Rolled belt/watch case
+  misc: { w: 5, h: 5 },
+  jacket: { w: 12, h: 14 },     // Folded Jacket
+  pants: { w: 11, h: 13 },      // Folded Jeans
+  suit: { w: 20, h: 22 },       // Folded Suit (in garment bag)
+};
+
+// Container Internal Dimensions (Inches)
+const CONTAINER_DIMS = {
+  suitcase: { w: 17, h: 24 }, // Standard Checked Bag (Interior)
+  carryOn: { w: 14, h: 21 },  // Standard Carry-On (Interior)
+};
+
+const CATEGORY_COLORS: Record<string, string> = {
+  clothing: 'bg-blue-100 border-blue-300 text-blue-600',
+  shoes: 'bg-orange-100 border-orange-300 text-orange-600',
+  electronics: 'bg-zinc-100 border-zinc-300 text-zinc-600',
+  toiletries: 'bg-teal-100 border-teal-300 text-teal-600',
+  documents: 'bg-yellow-100 border-yellow-300 text-yellow-600',
+  misc: 'bg-gray-100 border-gray-300 text-gray-500',
+};
+
+// --- Helper Functions ---
+
+const getDimensions = (item: PackingItem) => {
+  const lowerName = item.name.toLowerCase();
+  if (lowerName.includes('jacket') || lowerName.includes('coat')) return ITEM_DIMENSIONS.jacket;
+  if (lowerName.includes('jeans') || lowerName.includes('pants') || lowerName.includes('trousers')) return ITEM_DIMENSIONS.pants;
+  if (lowerName.includes('suit') || lowerName.includes('blazer')) return ITEM_DIMENSIONS.suit;
+  return ITEM_DIMENSIONS[item.category] || ITEM_DIMENSIONS.clothing;
+};
+
+const getIcon = (category: string, name: string) => {
+  const lowerName = name.toLowerCase();
+  if (category === 'electronics') return <Plug className="w-5 h-5" />;
+  if (category === 'shoes') return <Footprints className="w-5 h-5" />;
+  if (category === 'documents') return <FileText className="w-5 h-5" />;
+  if (category === 'toiletries') return <ShoppingBag className="w-5 h-5" />;
+  
+  if (lowerName.includes('umbrella')) return <Umbrella className="w-5 h-5" />;
+  if (lowerName.includes('camera')) return <Camera className="w-5 h-5" />;
+  if (lowerName.includes('headphone')) return <Headphones className="w-5 h-5" />;
+  if (lowerName.includes('watch')) return <Watch className="w-5 h-5" />;
+  if (lowerName.includes('phone')) return <Smartphone className="w-5 h-5" />;
+  
+  return <Shirt className="w-5 h-5" />;
+};
+
+export function VisualPackingAid({ items, tripType = 'leisure', tripDuration = 7 }: VisualPackingAidProps) {
+  const [visualItems, setVisualItems] = useState<VisualItem[]>([]);
+  const [scale, setScale] = useState(1); // pixels per inch
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const dragOffset = useRef({ x: 0, y: 0 });
+
+  // Calculate Scale on Mount/Resize
+  useEffect(() => {
+    const updateScale = () => {
+      if (containerRef.current) {
+        // We want the suitcase to fit comfortably.
+        // Let's say we want the 17" width to take up ~80% of the mobile screen or 300px on desktop
+        const availableWidth = Math.min(containerRef.current.clientWidth, 400); 
+        // 17 inches = availableWidth px
+        const newScale = (availableWidth - 40) / CONTAINER_DIMS.suitcase.w;
+        setScale(newScale);
+      }
+    };
+    
+    updateScale();
+    window.addEventListener('resize', updateScale);
+    return () => window.removeEventListener('resize', updateScale);
+  }, []);
+
+  // Initial Placement Logic
+  useEffect(() => {
+    if (!items.length) return;
+
+    const newVisualItems: VisualItem[] = [];
+    let toiletryCount = 0;
+    
+    // 1. Filter and Group Items
+    const processedItems = items.filter(item => {
+      // Group toiletries into one bag
+      if (item.category === 'toiletries') {
+        toiletryCount++;
+        return false; // Don't add individual toiletries
+      }
+      return true;
+    });
+
+    if (toiletryCount > 0) {
+      processedItems.push({
+        name: 'Toiletry Bag',
+        category: 'toiletries',
+        weight: 1.5,
+        quantity: 1
+      });
+    }
+
+    // 2. Sort items by size (largest first) for better packing
+    processedItems.sort((a, b) => {
+        const dimA = getDimensions(a);
+        const dimB = getDimensions(b);
+        return (dimB.w * dimB.h) - (dimA.w * dimA.h);
+    });
+
+    // 3. Placement Logic
+    // Simple 2D bin packing approximation
+    let suitcaseY = 0;
+    let suitcaseX = 0;
+    let carryOnY = 0;
+    let carryOnX = 0;
+
+    processedItems.forEach((item, index) => {
+      const dims = getDimensions(item);
+      const isCarryOnItem = item.category === 'electronics' || item.category === 'documents' || item.name.toLowerCase().includes('medication');
+      
+      // Force big items to suitcase unless explicitly carry-on
+      const containerId = isCarryOnItem ? 'carryOn' : 'suitcase';
+      const containerW = CONTAINER_DIMS[containerId].w;
+
+      let x, y;
+
+      if (containerId === 'suitcase') {
+        if (suitcaseX + dims.w > containerW) {
+            suitcaseX = 0;
+            suitcaseY += 8; // Move down a "row" (approx)
+        }
+        x = suitcaseX;
+        y = suitcaseY;
+        suitcaseX += dims.w; // Simple flow packing
+      } else {
+         if (carryOnX + dims.w > containerW) {
+            carryOnX = 0;
+            carryOnY += 8; 
+        }
+        x = carryOnX;
+        y = carryOnY;
+        carryOnX += dims.w;
+      }
+
+      newVisualItems.push({
+        id: `item-${index}-${item.name}`,
+        name: item.name,
+        category: item.category,
+        width: dims.w,
+        height: dims.h,
+        x: x * scale, // Initial X (will be updated by scale in render, but storing simplified here)
+        y: y * scale, // Initial Y
+        containerId,
+        color: CATEGORY_COLORS[item.category] || CATEGORY_COLORS.misc,
+        icon: getIcon(item.category, item.name)
+      });
+    });
+
+    // Reset positions to be strictly scale-independent in state if needed, 
+    // but here we just store raw values for the first render. 
+    // To make them "moveable", we need absolute pixels.
+    // Let's recalculate initial pixels based on the current scale.
+    
+    const scaledItems = newVisualItems.map(item => ({
+        ...item,
+        x: (item.x / scale) * scale, // Ensure it aligns
+        y: (item.y / scale) * scale 
+    }));
+
+    setVisualItems(scaledItems);
+  }, [items, tripType]); // Re-run if items or trip type changes
+
+  // Drag Handlers
+  const handleDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
+    // Prevent default to stop scrolling on touch devices if needed
+    // e.preventDefault(); 
+    
+    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+    
+    const item = visualItems.find(i => i.id === id);
+    if (item) {
+        setDraggingId(id);
+        dragOffset.current = {
+            x: clientX - item.x,
+            y: clientY - item.y
+        };
+    }
+  };
+
+  const handleDragMove = (e: React.MouseEvent | React.TouchEvent) => {
+    if (!draggingId) return;
+    
+    const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
+    const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
+
+    setVisualItems(prev => prev.map(item => {
+        if (item.id === draggingId) {
+            return {
+                ...item,
+                x: clientX - dragOffset.current.x,
+                y: clientY - dragOffset.current.y
+            };
+        }
+        return item;
+    }));
+  };
+
+  const handleDragEnd = () => {
+    setDraggingId(null);
+  };
+
+  return (
+    <div 
+        className="w-full h-full min-h-[600px] select-none touch-none" 
+        onMouseMove={handleDragMove}
+        onMouseUp={handleDragEnd}
+        onTouchMove={handleDragMove}
+        onTouchEnd={handleDragEnd}
+        ref={containerRef}
+    >
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold mb-2">Visual Packing Aid</h2>
+        <p className="text-gray-600 mb-4">
+          Drag and drop items to organize them. Items are sized relative to your luggage dimensions.
+          <br/>
+          <span className="text-sm text-gray-400">Scale: 1 inch ≈ {Math.round(scale)}px</span>
+        </p>
+      </div>
+
+      <Tabs defaultValue="suitcase" className="w-full">
+        <TabsList className="grid w-full grid-cols-2 mb-6">
+          <TabsTrigger value="suitcase">Checked Suitcase</TabsTrigger>
+          <TabsTrigger value="carryOn">Carry-On</TabsTrigger>
+        </TabsList>
+
+        {/* SUITCASE TAB */}
+        <TabsContent value="suitcase" className="flex justify-center">
+            <div 
+                className="relative bg-gray-100 border-4 border-gray-300 rounded-3xl overflow-hidden shadow-2xl"
+                style={{
+                    width: CONTAINER_DIMS.suitcase.w * scale,
+                    height: CONTAINER_DIMS.suitcase.h * scale,
+                    backgroundImage: tripType === 'business' 
+                        ? 'linear-gradient(rgba(0,0,0,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,0.05) 1px, transparent 1px)' 
+                        : 'none',
+                    backgroundSize: `${scale}px ${scale}px`
+                }}
+            >
+                {/* Handle UI */}
+                <div className="absolute -top-4 left-1/2 transform -translate-x-1/2 w-1/3 h-4 bg-gray-400 rounded-t-lg" />
+                
+                {/* Items */}
+                {visualItems.filter(i => i.containerId === 'suitcase').map(item => (
+                    <div
+                        key={item.id}
+                        onMouseDown={(e) => handleDragStart(e, item.id)}
+                        onTouchStart={(e) => handleDragStart(e, item.id)}
+                        className={`absolute rounded-md shadow-sm border flex flex-col items-center justify-center cursor-move transition-shadow hover:shadow-lg active:shadow-xl active:z-50 ${item.color}`}
+                        style={{
+                            width: item.width * scale,
+                            height: item.height * scale,
+                            left: item.x, // Note: Simplistic positioning, in real app needs bounds checking relative to container
+                            top: item.y,
+                            zIndex: draggingId === item.id ? 50 : 10,
+                            // Ensure items don't look blurry
+                            willChange: 'transform, left, top' 
+                        }}
+                    >
+                        {item.icon}
+                        {/* Only show text if item is big enough */}
+                        {(item.width * scale) > 40 && (item.height * scale) > 30 && (
+                            <span className="text-[10px] font-medium mt-1 truncate max-w-full px-1 text-center leading-tight">
+                                {item.name}
+                            </span>
+                        )}
+                    </div>
+                ))}
+                
+                {/* Suitcase Interior Details */}
+                <div className="absolute bottom-0 w-full h-8 bg-gray-200/50 flex items-center justify-center border-t border-gray-300 pointer-events-none">
+                     <span className="text-xs text-gray-500 uppercase font-bold tracking-wider">Wheel Well</span>
+                </div>
+            </div>
+        </TabsContent>
+
+        {/* CARRY-ON TAB */}
+        <TabsContent value="carryOn" className="flex justify-center">
+            <div 
+                className="relative bg-slate-50 border-4 border-slate-300 rounded-2xl overflow-hidden shadow-xl"
+                style={{
+                    width: CONTAINER_DIMS.carryOn.w * scale,
+                    height: CONTAINER_DIMS.carryOn.h * scale,
+                }}
+            >
+                {visualItems.filter(i => i.containerId === 'carryOn').map(item => (
+                    <div
+                        key={item.id}
+                        onMouseDown={(e) => handleDragStart(e, item.id)}
+                        onTouchStart={(e) => handleDragStart(e, item.id)}
+                        className={`absolute rounded-md shadow-sm border flex flex-col items-center justify-center cursor-move transition-shadow hover:shadow-lg active:shadow-xl active:z-50 ${item.color}`}
+                        style={{
+                            width: item.width * scale,
+                            height: item.height * scale,
+                            left: item.x,
+                            top: item.y,
+                            zIndex: draggingId === item.id ? 50 : 10
+                        }}
+                    >
+                         {item.icon}
+                         {(item.width * scale) > 40 && (item.height * scale) > 30 && (
+                            <span className="text-[10px] font-medium mt-1 truncate max-w-full px-1 text-center leading-tight">
+                                {item.name}
+                            </span>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </TabsContent>
+      </Tabs>
+      
+      <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4">
+        <div className="p-3 bg-gray-50 rounded-lg text-center">
+            <span className="block text-2xl font-bold text-blue-600">{CONTAINER_DIMS.suitcase.w}" x {CONTAINER_DIMS.suitcase.h}"</span>
+            <span className="text-xs text-gray-500">Checked Dimensions</span>
+        </div>
+        <div className="p-3 bg-gray-50 rounded-lg text-center">
+            <span className="block text-2xl font-bold text-gray-600">{CONTAINER_DIMS.carryOn.w}" x {CONTAINER_DIMS.carryOn.h}"</span>
+            <span className="text-xs text-gray-500">Carry-On Dimensions</span>
+        </div>
+        <div className="p-3 bg-gray-50 rounded-lg text-center">
+             <span className="block text-2xl font-bold text-green-600">{tripType === 'business' ? 'Business' : 'Leisure'}</span>
+             <span className="text-xs text-gray-500">Packing Mode</span>
+        </div>
+         <div className="p-3 bg-gray-50 rounded-lg text-center">
+             <span className="block text-2xl font-bold text-purple-600">{items.length}</span>
+             <span className="text-xs text-gray-500">Total Items</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default VisualPackingAid;
