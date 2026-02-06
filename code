@@ -11,7 +11,6 @@ import {
   Watch, 
   Smartphone, 
   ShoppingBag,
-  Grid,
   Laptop,
   Pill,
   Sun,
@@ -20,7 +19,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card } from '@/components/ui/card';
 
-// --- Types ---
+// --- Interfaces (Type Definitions) ---
 
 interface PackingItem {
   name: string;
@@ -35,8 +34,8 @@ interface VisualItem {
   category: string;
   width: number;  // inches
   height: number; // inches
-  x: number;      // pixels
-  y: number;      // pixels
+  x: number;      // pixels (relative to container)
+  y: number;      // pixels (relative to container)
   containerId: 'suitcase' | 'carryOn';
   color: string;
   borderColor: string;
@@ -45,12 +44,13 @@ interface VisualItem {
 
 interface VisualPackingAidProps {
   items: PackingItem[];
-  tripType?: string; // 'business', 'leisure', etc.
+  tripType?: string; // e.g., 'business', 'leisure'
 }
 
-// --- Constants & Dimensions (Inches) ---
+// --- Configuration & Constants ---
 
-// Real-world average sizes for folded items
+// 1. Real-World Dimensions (Inches)
+// These represent the average 2D footprint of items when folded flat.
 const ITEM_SPECS: Record<string, { w: number; h: number }> = {
   // Clothing
   shirt: { w: 10, h: 12 },
@@ -60,11 +60,11 @@ const ITEM_SPECS: Record<string, { w: number; h: number }> = {
   shorts: { w: 10, h: 10 },
   jacket: { w: 16, h: 20 },
   coat: { w: 18, h: 22 },
-  suit: { w: 19, h: 24 }, // Folded in half or in suit bag
+  suit: { w: 20, h: 24 }, // Garment bag size
   underwear: { w: 5, h: 4 },
   socks: { w: 4, h: 4 },
   
-  // Gear
+  // Gear & Accessories
   shoes: { w: 8, h: 13 }, // Pair
   boots: { w: 10, h: 14 },
   toiletryBag: { w: 10, h: 6 },
@@ -76,13 +76,13 @@ const ITEM_SPECS: Record<string, { w: number; h: number }> = {
   misc: { w: 5, h: 5 }
 };
 
-// Luggage Internal Dimensions (Inches)
+// 2. Luggage Interior Dimensions (Inches)
 const LUGGAGE_SPECS = {
   suitcase: { w: 18, h: 26, name: "Checked Bag" }, // Standard Large Checked
   carryOn: { w: 14, h: 22, name: "Carry-On" }     // Standard Overhead Bin
 };
 
-// Styling for "Images"
+// 3. Visual Styling Map
 const CATEGORY_STYLES: Record<string, { bg: string, border: string, text: string }> = {
   clothing:   { bg: 'bg-blue-100', border: 'border-blue-300', text: 'text-blue-600' },
   shoes:      { bg: 'bg-orange-100', border: 'border-orange-300', text: 'text-orange-600' },
@@ -95,6 +95,9 @@ const CATEGORY_STYLES: Record<string, { bg: string, border: string, text: string
 
 // --- Helper Functions ---
 
+/**
+ * Determines the dimensions of an item based on its name or category.
+ */
 const getSpecs = (name: string, category: string) => {
   const lower = name.toLowerCase();
   if (lower.includes('suit') || lower.includes('blazer')) return ITEM_SPECS.suit;
@@ -107,13 +110,16 @@ const getSpecs = (name: string, category: string) => {
   if (lower.includes('underwear') || lower.includes('boxer') || lower.includes('bra')) return ITEM_SPECS.underwear;
   if (lower.includes('laptop') || lower.includes('macbook')) return ITEM_SPECS.laptop;
   
-  // Default by category
+  // Fallbacks by category
   if (category === 'clothing') return ITEM_SPECS.tshirt;
   if (category === 'electronics') return ITEM_SPECS.camera;
   if (category === 'documents') return ITEM_SPECS.passport;
   return ITEM_SPECS.misc;
 };
 
+/**
+ * Returns the appropriate Lucide icon component.
+ */
 const getIcon = (category: string, name: string) => {
   const lower = name.toLowerCase();
   const props = { className: "w-6 h-6 opacity-70" };
@@ -130,36 +136,33 @@ const getIcon = (category: string, name: string) => {
   if (lower.includes('watch')) return <Watch {...props} />;
   if (lower.includes('wallet') || lower.includes('money')) return <Wallet {...props} />;
   if (lower.includes('umbrella')) return <Umbrella {...props} />;
-  if (lower.includes('glass') || lower.includes('sunglass')) return <Sun {...props} />;
+  if (lower.includes('glass')) return <Sun {...props} />;
   
-  return <Shirt {...props} />; // Default clothing
+  return <Shirt {...props} />; // Default
 };
 
-// --- Component ---
+// --- Main Component ---
 
 export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingAidProps) {
   const [visualItems, setVisualItems] = useState<VisualItem[]>([]);
   const [activeTab, setActiveTab] = useState('suitcase');
   
-  // Scale: Pixels per Inch. 
-  // On mobile (<768px), we scale down to fit. On desktop, we use a comfortable size.
+  // Scale: Pixels per Inch. Defaults to 14, adjusts for mobile.
   const [scale, setScale] = useState(14); 
 
   // Dragging State
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const dragOffset = useRef({ x: 0, y: 0 });
 
-  // 1. Initialize & Organize Items
+  // --- Effect: Item Sorting & Auto-Placement ---
   useEffect(() => {
     if (!items.length) return;
 
-    // Filter out individual toiletries to group them
+    // 1. Group Toiletries
     const nonToiletries = items.filter(i => i.category !== 'toiletries');
     const hasToiletries = items.some(i => i.category === 'toiletries');
-
     const processedList = [...nonToiletries];
     
-    // Add the Toiletry Bag if needed
     if (hasToiletries) {
       processedList.push({
         name: "Toiletry Bag",
@@ -169,27 +172,25 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
       });
     }
 
-    // Sort: Largest items first for better auto-packing
+    // 2. Sort by size (Largest to Smallest) to improve packing efficiency
     processedList.sort((a, b) => {
       const specA = getSpecs(a.name, a.category);
       const specB = getSpecs(b.name, b.category);
       return (specB.w * specB.h) - (specA.w * specA.h);
     });
 
-    // Auto-Placement Algorithm
+    // 3. Smart Placement Logic
     const newVisuals: VisualItem[] = [];
     
-    // Track current "cursor" for packing
-    let suitX = 1, suitY = 1;
-    let carryX = 1, carryY = 1;
-    let suitRowH = 0, carryRowH = 0;
+    // Cursors for simple row-based packing algorithm
+    let suitX = 1, suitY = 1, suitRowH = 0;
+    let carryX = 1, carryY = 1, carryRowH = 0;
 
     processedList.forEach((item, idx) => {
       const specs = getSpecs(item.name, item.category);
       const styles = CATEGORY_STYLES[item.category] || CATEGORY_STYLES.misc;
       
-      // Decision: Suitcase vs CarryOn?
-      // Rules: Electronics, Docs, Meds, Valuables -> CarryOn. Everything else -> Suitcase.
+      // Logic: Essential Tech/Docs/Meds go to Carry-On. Bulk/Clothes go to Suitcase.
       const isCarryOn = 
         item.category === 'electronics' || 
         item.category === 'documents' || 
@@ -202,7 +203,7 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
       
       let x, y;
 
-      // Simple Flow Layout Logic
+      // Simple packing algorithm: Fill row, then move down
       if (container === 'suitcase') {
         if (suitX + specs.w > limitW) {
           suitX = 1;
@@ -211,7 +212,7 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
         }
         x = suitX; 
         y = suitY;
-        suitX += specs.w + 0.5; // Add spacing
+        suitX += specs.w + 0.5; // Add item width + spacing
         if (specs.h > suitRowH) suitRowH = specs.h;
       } else {
         if (carryX + specs.w > limitW) {
@@ -231,7 +232,7 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
         category: item.category,
         width: specs.w,
         height: specs.h,
-        x: x * scale, // Convert to pixels immediately
+        x: x * scale, 
         y: y * scale,
         containerId: container,
         color: styles.bg,
@@ -241,24 +242,23 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
     });
 
     setVisualItems(newVisuals);
-  }, [items, scale]); // Recalculate if scale changes to keep positions correct
+  }, [items, scale]); // Re-run if items change or scale updates
 
-  // 2. Responsive Scaling
+  // --- Effect: Responsive Scaling ---
   useEffect(() => {
     const handleResize = () => {
-      const width = window.innerWidth;
-      if (width < 640) setScale(10); // Mobile: Smaller
-      else setScale(15);             // Desktop: Realistic
+      // If mobile, shrink scale. If desktop, use full size.
+      if (window.innerWidth < 640) setScale(10); 
+      else setScale(15);
     };
-    handleResize(); // Initial
+    handleResize();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  // 3. Drag Handlers
+  // --- Drag & Drop Handlers ---
   const handleDragStart = (e: React.MouseEvent | React.TouchEvent, id: string) => {
-    // Prevent scrolling on touch
-    // e.preventDefault(); 
+    // Determine coordinates based on Mouse or Touch
     const clientX = 'touches' in e ? e.touches[0].clientX : (e as React.MouseEvent).clientX;
     const clientY = 'touches' in e ? e.touches[0].clientY : (e as React.MouseEvent).clientY;
 
@@ -294,6 +294,7 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
     setDraggingId(null);
   };
 
+  // --- Render ---
   return (
     <div 
       className="w-full select-none"
@@ -310,8 +311,12 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
           </p>
         </div>
         <div className="flex gap-2">
-           <div className="bg-blue-50 text-blue-700 px-3 py-1 rounded-full text-xs font-semibold border border-blue-200">
-             {tripType === 'business' ? 'Business Layout' : 'Leisure Layout'}
+           <div className={`px-3 py-1 rounded-full text-xs font-semibold border ${
+             tripType === 'business' 
+             ? 'bg-purple-50 text-purple-700 border-purple-200' 
+             : 'bg-green-50 text-green-700 border-green-200'
+           }`}>
+             {tripType === 'business' ? 'Business Mode' : 'Leisure Mode'}
            </div>
            <div className="bg-gray-100 text-gray-700 px-3 py-1 rounded-full text-xs font-semibold border border-gray-200">
              Scale: 1:{scale}
@@ -329,13 +334,16 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
           </TabsTrigger>
         </TabsList>
 
-        {/* CONTAINER RENDERER */}
         {['suitcase', 'carryOn'].map((containerKey) => {
           const dims = LUGGAGE_SPECS[containerKey as keyof typeof LUGGAGE_SPECS];
           const isActive = activeTab === containerKey;
           
+          // Optimization: Don't render content if tab isn't active
           if (!isActive) return null;
 
+          // Background Logic for Business Trips
+          const isBusinessSuitcase = containerKey === 'suitcase' && tripType === 'business';
+          
           return (
             <TabsContent key={containerKey} value={containerKey} className="flex justify-center min-h-[600px] overflow-hidden">
               <div 
@@ -351,13 +359,22 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
                   backgroundSize: `${scale}px ${scale}px`
                 }}
               >
-                {/* Luggage Interior Details */}
-                <div className="absolute inset-0 pointer-events-none border-8 border-slate-100 rounded-[20px] opacity-50" />
+                {/* Visual Aid: Suit Compartment for Business Trips */}
+                {isBusinessSuitcase && (
+                  <div className="absolute top-0 w-full h-[35%] bg-purple-50/50 border-b border-purple-200 flex items-center justify-center pointer-events-none">
+                     <span className="text-purple-300 text-sm font-bold uppercase tracking-widest">Suit Compartment</span>
+                  </div>
+                )}
+
+                {/* Visual Aid: Wheel Housing (Bottom) */}
+                <div className="absolute bottom-0 w-full h-8 bg-slate-100/80 border-t border-slate-200 flex items-center justify-center pointer-events-none z-0">
+                  <div className="w-1/2 h-2 bg-slate-200 rounded-full"></div>
+                </div>
                 
-                {/* Handle (Visual only) */}
+                {/* Visual Aid: Handle (Top) */}
                 <div className="absolute -top-6 left-1/2 -translate-x-1/2 w-32 h-6 bg-slate-800 rounded-t-xl" />
 
-                {/* Items */}
+                {/* Render Items */}
                 {visualItems
                   .filter(item => item.containerId === containerKey)
                   .map(item => (
@@ -368,7 +385,7 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
                       className={`
                         absolute flex flex-col items-center justify-center 
                         border-2 rounded-lg cursor-grab active:cursor-grabbing 
-                        shadow-sm hover:shadow-lg hover:z-50 transition-shadow
+                        shadow-sm hover:shadow-lg hover:z-50 transition-all
                         ${item.color} ${item.borderColor}
                       `}
                       style={{
@@ -377,17 +394,16 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
                         left: item.x,
                         top: item.y,
                         zIndex: draggingId === item.id ? 100 : 10,
-                        touchAction: 'none'
+                        touchAction: 'none' // Essential for mobile drag
                       }}
                     >
-                      {/* Icon */}
-                      <div className="mb-1 pointer-events-none">
+                      <div className="pointer-events-none scale-75 md:scale-100">
                         {item.icon}
                       </div>
                       
-                      {/* Label - Only show if item is big enough */}
+                      {/* Only show text if item is big enough to hold it */}
                       {(item.width * scale > 40 && item.height * scale > 30) && (
-                        <span className="text-[10px] font-medium text-center leading-tight px-1 pointer-events-none opacity-80 truncate w-full">
+                        <span className="text-[9px] md:text-[10px] font-medium text-center leading-tight px-1 pointer-events-none opacity-80 truncate w-full mt-1">
                           {item.name}
                         </span>
                       )}
@@ -399,7 +415,7 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
         })}
       </Tabs>
 
-      {/* Legend / Info */}
+      {/* Legend Card */}
       <Card className="mt-8 bg-slate-50 border-slate-200">
         <div className="p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm text-center">
           <div>
@@ -411,12 +427,12 @@ export function VisualPackingAid({ items, tripType = 'leisure' }: VisualPackingA
             <span className="text-slate-500">Electronics, Meds, Docs</span>
           </div>
           <div>
-            <span className="block font-bold text-slate-700">Proportional</span>
-            <span className="text-slate-500">Items sized to scale</span>
+            <span className="block font-bold text-slate-700">Business Mode</span>
+            <span className="text-slate-500">{tripType === 'business' ? 'On' : 'Off'}</span>
           </div>
           <div>
-            <span className="block font-bold text-slate-700">Weight</span>
-            <span className="text-slate-500">lbs / inches (Imperial)</span>
+            <span className="block font-bold text-slate-700">Units</span>
+            <span className="text-slate-500">Imperial (Lbs / Inches)</span>
           </div>
         </div>
       </Card>
